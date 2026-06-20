@@ -1,4 +1,4 @@
-// Mervin & Mervis — in-browser chat on a fine-tuned Phi-4-mini (ONNX q4f16, WebGPU).
+// Mervin & Mervis — in-browser chat on a fine-tuned Phi-4-mini (ONNX q4, WebGPU).
 // Everything runs client-side; the model is served same-origin from ./model/.
 
 import {
@@ -56,7 +56,7 @@ async function loadModel() {
   try {
     tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
     model = await AutoModelForCausalLM.from_pretrained(MODEL_ID, {
-      dtype: "q4f16",
+      dtype: "q4", // q4f16 is broken for Phi-3 RMSNorm; see convert_to_onnx.py
       device: "webgpu",
       progress_callback: onProgress,
     });
