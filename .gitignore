@@ -1,0 +1,21 @@
+# scratch
+tmp/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# model artifacts (too large for git; produced on Colab, pulled via Drive)
+*.safetensors
+*.gguf
+*.onnx
+*.onnx_data
+checkpoints/
+mervis-lora/
+mervis-merged/
+web/model/
+
+# os
+.DS_Store
+Thumbs.db

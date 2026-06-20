@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mervin &amp; Mervis</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Mervin &amp; Mervis 🤖💧🤖✨</h1>
+    <p class="sub">A two-headed robot, running entirely in your browser.</p>
+  </header>
+
+  <!-- Load gate: model download/compile happens here, once, then cached. -->
+  <div id="loader" class="loader">
+    <button id="load-btn">Load the robots (~2.2&nbsp;GB, cached after first time)</button>
+    <div id="load-status" class="load-status" hidden>
+      <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+      <div id="load-text" class="load-text">Starting…</div>
+    </div>
+    <p id="no-webgpu" class="warn" hidden>
+      This browser has no WebGPU (<code>navigator.gpu</code>). Use a recent Chrome or Edge.
+    </p>
+  </div>
+
+  <main id="chat" class="chat" hidden></main>
+
+  <form id="composer" class="composer" hidden>
+    <textarea id="input" rows="1" placeholder="Ask the robots something…" autocomplete="off"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
