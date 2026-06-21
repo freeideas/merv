@@ -19,6 +19,11 @@ const MODEL_ID = "model";
 // (e.g. an old cached graph that references a shard the new manifest dropped).
 const MODEL_VERSION = "2026-06-21-embsplit-2shard";
 
+// Runtime override for A/B testing: ?device=wasm runs the SAME q4 model on the
+// CPU/WASM backend (slow, but numerically matches local inference) so you can
+// compare answer quality against the default WebGPU backend on the same machine.
+const DEVICE = new URLSearchParams(location.search).get("device") || "webgpu";
+
 const els = {
   loadBtn: document.getElementById("load-btn"),
   loadStatus: document.getElementById("load-status"),
@@ -51,7 +56,7 @@ function onProgress(p) {
 }
 
 async function loadModel() {
-  if (!navigator.gpu) {
+  if (DEVICE === "webgpu" && !navigator.gpu) {
     els.noWebgpu.hidden = false;
     return;
   }
@@ -88,7 +93,7 @@ async function loadModel() {
     }));
     model = await AutoModelForCausalLM.from_pretrained(MODEL_ID, {
       dtype: "q4", // q4f16 is broken for Phi-3 RMSNorm; see convert_to_onnx.py
-      device: "webgpu",
+      device: DEVICE, // "webgpu" (default) or ?device=wasm for CPU A/B testing
       session_options: { externalData },
       progress_callback: onProgress,
     });
@@ -227,7 +232,7 @@ async function generate(userText) {
 // ---- wiring --------------------------------------------------------------
 
 els.loadBtn.addEventListener("click", loadModel);
-if (!navigator.gpu) els.noWebgpu.hidden = false;
+if (DEVICE === "webgpu" && !navigator.gpu) els.noWebgpu.hidden = false;
 
 els.composer.addEventListener("submit", async (e) => {
   e.preventDefault();
