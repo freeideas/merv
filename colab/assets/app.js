@@ -14,6 +14,10 @@ env.allowLocalModels = true;
 env.localModelPath = "./"; // model id "model" -> ./model/
 
 const MODEL_ID = "model";
+// Bump whenever the model files change (re-quantize, re-shard, new manifest) so
+// returning visitors evict their cached copies instead of loading a stale mix
+// (e.g. an old cached graph that references a shard the new manifest dropped).
+const MODEL_VERSION = "2026-06-21-embsplit-2shard";
 
 const els = {
   loadBtn: document.getElementById("load-btn"),
@@ -54,14 +58,29 @@ async function loadModel() {
   els.loadBtn.hidden = true;
   els.loadStatus.hidden = false;
   try {
+    // Transformers.js caches model files in the "transformers-cache" Cache
+    // Storage and serves them back WITHOUT revalidation. When the model content
+    // changes at the same URLs (e.g. re-sharding), a returning visitor would load
+    // a stale/mismatched mix. Evict the old cache whenever MODEL_VERSION changes.
+    try {
+      if (localStorage.getItem("merv_model_version") !== MODEL_VERSION) {
+        if (self.caches) await caches.delete("transformers-cache");
+        localStorage.setItem("merv_model_version", MODEL_VERSION);
+      }
+    } catch (_) {
+      /* private mode / storage disabled — proceed without the cache-bust */
+    }
+
     tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
     // The weights are sharded into <2 GB files: V8 caps a single ArrayBuffer at
     // ~2 GB, and the default loader fetches the whole *.onnx_data into ONE buffer
     // (so a 3.6 GB sidecar can never load). We fetch the manifest and hand ORT
     // each shard separately via session_options.externalData -- each its own
     // buffer, all mounted into the WASM heap (which holds the full ~3.6 GB fine).
+    // no-store: the manifest is tiny and must reflect the CURRENT shard set; a
+    // stale HTTP-cached copy here desyncs externalData from the deployed shards.
     const manifest = await (
-      await fetch("./model/onnx/external_data_manifest.json")
+      await fetch("./model/onnx/external_data_manifest.json", { cache: "no-store" })
     ).json();
     const externalData = manifest.shards.map((name) => ({
       path: name, // must match the graph's external-data location string
