@@ -160,6 +160,9 @@ def split(src_dir, out_dir, n_split, max_shard):
     with open(os.path.join(out_dir, "external_data_manifest.json"), "w") as f:
         json.dump({"model": "model_q4.onnx", "shards": shard_names}, f, indent=1)
 
+    # Caddy serves as another user; onnx/0600 outputs would 403. Make world-readable.
+    for fn in ["model_q4.onnx", "external_data_manifest.json"] + shard_names:
+        os.chmod(os.path.join(out_dir, fn), 0o644)
     for fn in ["model_q4.onnx"] + shard_names:
         print(f"  {fn}  {os.path.getsize(os.path.join(out_dir, fn)) / 1e6:.1f} MB")
     return emb.name, part_names, (loc, off, length)

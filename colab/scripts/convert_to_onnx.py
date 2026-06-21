@@ -11,6 +11,9 @@ Pipeline:
      weights only, activations stay fp32                    -> OUT/onnx/model_q4.onnx
   2b. fp16 the fp32 token-embedding table (post-Gather Cast back to fp32) so the
      model fits under ORT-Web's ~4 GB WASM load ceiling     -> ~4.86 GB -> ~3.63 GB
+  2c. split the fp16 embedding into 4 column-slices (4 Gather + Concat) so no single
+     GPU buffer exceeds WebGPU's maxBufferSize (~1 GiB on weak/software adapters);
+     lossless. Reuses split_embedding.py (also runnable standalone post-hoc).
   3. copy tokenizer/config into OUT/, make the outputs world-readable
 
 Why q4 and NOT q4f16 (the lesson that cost the VM team real time): casting the
@@ -228,6 +231,30 @@ def quantize():
     save_sharded(qmodel, ONNX_OUT, "model_q4.onnx", "model_q4.onnx_data")
 
 
+def split_embedding_step():
+    """Split the fp16 embedding so no single WebGPU buffer exceeds maxBufferSize.
+
+    Reuses split_embedding.py (the same code we run standalone to retrofit an
+    already-deployed model) so the two paths can't drift: split the just-saved
+    OUT/onnx into a temp dir, verify the split is byte-identical, then swap it in.
+    """
+    import shutil as _shutil
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import split_embedding  # sibling module in colab/scripts/
+
+    tmp = ONNX_OUT.parent / "onnx_split"
+    if tmp.exists():
+        _shutil.rmtree(tmp)
+    print("[3b/3] splitting fp16 embedding (4 Gather + Concat, lossless)...", flush=True)
+    emb, parts, src_loc = split_embedding.split(
+        str(ONNX_OUT), str(tmp), n_split=4, max_shard=SHARD_MAX)
+    split_embedding.verify(str(ONNX_OUT), str(tmp), emb, parts, src_loc)
+    _shutil.rmtree(ONNX_OUT)
+    tmp.rename(ONNX_OUT)
+    print("      embedding split in place (largest GPU buffer now ~307 MB)")
+
+
 def assemble():
     OUT.mkdir(parents=True, exist_ok=True)
     copied = []
@@ -242,6 +269,7 @@ def assemble():
 def main():
     export_fp32()
     quantize()
+    split_embedding_step()
     assemble()
     size = sum(f.stat().st_size for f in ONNX_OUT.glob("*")) / 1e9
     print(f"\nDONE. {ONNX_OUT} total = {size:.2f} GB")
