@@ -55,9 +55,22 @@ async function loadModel() {
   els.loadStatus.hidden = false;
   try {
     tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
+    // The weights are sharded into <2 GB files: V8 caps a single ArrayBuffer at
+    // ~2 GB, and the default loader fetches the whole *.onnx_data into ONE buffer
+    // (so a 3.6 GB sidecar can never load). We fetch the manifest and hand ORT
+    // each shard separately via session_options.externalData -- each its own
+    // buffer, all mounted into the WASM heap (which holds the full ~3.6 GB fine).
+    const manifest = await (
+      await fetch("./model/onnx/external_data_manifest.json")
+    ).json();
+    const externalData = manifest.shards.map((name) => ({
+      path: name, // must match the graph's external-data location string
+      data: `onnx/${name}`, // fetched relative to the model dir (./model/)
+    }));
     model = await AutoModelForCausalLM.from_pretrained(MODEL_ID, {
       dtype: "q4", // q4f16 is broken for Phi-3 RMSNorm; see convert_to_onnx.py
       device: "webgpu",
+      session_options: { externalData },
       progress_callback: onProgress,
     });
   } catch (err) {

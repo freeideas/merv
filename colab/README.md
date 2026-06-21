@@ -79,7 +79,7 @@ it in cells 4.2 / Phase 6.
 | 1.8  | merge LoRA → fp16 `mervis-merged` |
 | 2.1  | *(skip on High-RAM)* add swapfile |
 | 2.2  | build the isolated conversion venv |
-| 2.3  | **convert** → `web/model/onnx/model_q4.onnx` (no fp16 cast) |
+| 2.3  | **convert** → `web/model/onnx/model_q4.onnx` (q4 + fp16 embedding cast → ~3.6 GB) |
 | 2.4  | CPU sanity-generate — confirms tags survived before you trust it |
 | 3    | assemble the static `web/` site |
 | 3.1  | probe whether the weights are worth compressing over the wire |
@@ -182,7 +182,7 @@ curl -sI https://your.domain/                       # expect HTTP/2 200
 curl -sI https://your.domain/model/onnx/model_q4.onnx_data | grep -i 'accept-ranges'  # 206-capable
 ```
 
-First browser visit downloads the ~4.9 GB q4 model once and caches it (IndexedDB /
+First browser visit downloads the ~3.6 GB q4 model once and caches it (IndexedDB /
 Cache API); after that it loads from cache and runs fully offline. (Prefer not to
 give Colab SSH access? Use the *Alternative deploy* path in the notebook: back up
 the site to Drive and `rclone` it down yourself.)
@@ -204,21 +204,29 @@ diffable in git.
   the combination that trained end-to-end.
 - **Conversion in a separate venv** — the ONNX toolchain (optimum / onnxruntime /
   onnx_ir / onnxconverter_common) conflicts with the training stack.
-- **q4, not q4f16** — the fp16 cast half-converts Phi-3's RMSNorm fp32 island into
-  a mixed fp32/fp16 layernorm `Add` that onnxruntime won't load (reordering doesn't
-  help — the cast itself is the problem). So we ship q4 (4-bit weights, fp32
+- **q4, not q4f16** — a full fp16 cast half-converts Phi-3's RMSNorm fp32 island
+  into a mixed fp32/fp16 layernorm `Add` that onnxruntime won't load (reordering
+  doesn't help — the cast itself is the problem). So we ship q4 (4-bit weights, fp32
   activations). See the header in `scripts/convert_to_onnx.py`.
+- **fp16 embedding cast (the 4 GB WASM ceiling)** — ORT-Web loads the *whole* model
+  into a 32-bit WASM heap (~4 GB cap) before WebGPU gets it, so plain q4 at ~4.86 GB
+  won't load. `MatMulNBits` leaves the fp32 embedding table (`[200064, 3072]` ≈ 2.46
+  GB) untouched, so the convert script fp16's just that one tensor and `Cast`s back
+  to fp32 after the `Gather` (RMSNorm islands stay fp32). Result: **~3.6 GB**, under
+  the ceiling, q4 semantics unchanged. See `fp16_embedding_cast` in the convert script.
 - **No COOP/COEP** — the WebGPU backend needs no `SharedArrayBuffer`, and
   `require-corp` would block app.js's `@huggingface/transformers` CDN import. Serve
   plain static files over HTTPS.
 - **`chmod 644` the `*.onnx_data`** — `onnx.save` writes it `0600`; Caddy runs as
   another user and would 403. The convert script now fixes the mode automatically.
-- **~4.9 GB comes back** — the browser runs `web/model` (q4); the 7.7 GB merged
-  model stays on Drive as an optional re-convert backup.
-- **Wire compression barely helps the weights** — 4-bit quantized weights are
-  near-random bytes, so gzip/zstd/brotli shave only a few % off the big
-  `*.onnx_data` (cell 3.1 measures the real ratio for you). `encode zstd gzip`
-  still helps the small text assets. The real size lever is quantization: a
-  *working* q4f16 would be ~3.4 GB (see the `FP16_GPU_EXPORT` note in
-  `convert_to_onnx.py`). And the browser caches the model after the first load
+- **~3.6 GB comes back** — the browser runs `web/model` (q4 + fp16 embedding); the
+  7.7 GB merged model stays on Drive as an optional re-convert backup.
+- **Wire compression is mixed** — the 4-bit MatMul weights are near-random bytes
+  (gzip/zstd/brotli barely dent them), but the fp16 embedding region still
+  compresses ~2x (cell 3.1 measures the real ratio on a sample). Note `encode zstd
+  gzip` skips large/binary MIME types, so to serve the weights compressed you'd
+  pre-compress on disk (`zstd -12 -T0`, not `-19` which is hours) and use Caddy's
+  `precompressed` handler; `encode` still helps the small text assets. A further
+  size lever is a *working* q4f16 (~3.4 GB; see the `FP16_GPU_EXPORT` note in
+  `convert_to_onnx.py`). The browser caches the model after the first load
   (IndexedDB / Cache API), so it's a one-time download per browser regardless.

@@ -70,7 +70,8 @@ serves the static `web/` over HTTPS.
 
 If you'd rather not give Colab SSH access, the **Drive hop** still works as a
 fallback: set `SHIP_SITE_TO_DRIVE = True` in Phase 5, then pull it down yourself
-(**~4.9 GB**, the quantized q4 browser model — not the 7.7 GB merged model):
+(**~3.6 GB**, the quantized q4 browser model with the embedding table fp16'd — not
+the 7.7 GB merged model):
 
 ```bash
 # one-time: rclone config → remote 'gdrive', type 'drive'
@@ -91,9 +92,14 @@ your.domain {
 }
 ```
 
+That plain block serves the **raw** shards (~3.6 GB). To serve the smaller
+zstd-precompressed shards (~3.0 GB), pre-compress each `*.onnx_data_*` with
+`zstd -12 -T0`, keep the raw file beside it, and use `file_server { precompressed
+zstd gzip }` (see the *Compression* tech note for the raw-must-exist gotcha).
+
 Open the page in a recent **Chrome/Edge** (WebGPU). First visit downloads the model
-once (~4.9 GB) and caches it in the browser; after that it loads from cache and runs
-offline.
+once (~3.6 GB raw / ~3.0 GB zstd) and caches it in the browser; after that it loads
+from cache and runs offline.
 
 ## What's in here
 
@@ -104,7 +110,7 @@ merv/
   colab/
     mervis_build.ipynb           ← the all-in-one notebook
     build_notebook.py            ← regenerates the .ipynb (edit here, not the JSON)
-    scripts/convert_to_onnx.py   ← merged model → ONNX q4
+    scripts/convert_to_onnx.py   ← merged model → sharded ONNX q4 (fp16 embedding)
     assets/                      ← the browser app, baked in (served as web/)
       index.html  app.js  styles.css  img/bot-{happy,sad}.png
 ```
@@ -122,19 +128,40 @@ what makes the tag-splitting in the UI reliable.
 - **Training:** QLoRA (4-bit base via bitsandbytes) with `transformers` + `peft` +
   `trl`'s `SFTTrainer`; adapter merged back into fp16 weights.
 - **Browser runtime:** Transformers.js (ONNX), **q4** (4-bit weights, fp32
-  activations), **WebGPU**, served same-origin. We **don't** cast to fp16:
-  `convert_float_to_float16` half-converts Phi-3's RMSNorm fp32 island, leaving a
-  layernorm `Add` with mixed fp32/fp16 operands that onnxruntime won't load —
-  reordering doesn't help, the cast itself is the problem. So q4 (~4.9 GB) it is;
-  a true q4f16 (~3.4 GB) needs explicit float16 op/node block-lists. The q4 build
-  wants **fp32** `past_key_values` (Transformers.js handles this in the browser).
+  activations), **WebGPU**, served same-origin. We **don't** do a full fp16 graph
+  cast: `convert_float_to_float16` half-converts Phi-3's RMSNorm fp32 island,
+  leaving a layernorm `Add` with mixed fp32/fp16 operands that onnxruntime won't
+  load — reordering doesn't help, the cast itself is the problem.
+- **Two browser-load ceilings (why fp16-embedding *and* sharding):** ONNX Runtime
+  Web loads the **whole** model into a 32-bit WASM heap (~4 GB) *before* WebGPU gets
+  it — and, the harder wall, **V8 caps a single `ArrayBuffer` at ~2 GB** while the
+  default loader pulls the entire `*.onnx_data` into **one** buffer. So a 4.86 GB
+  single-file q4 fails twice over. Two fixes, both in `convert_to_onnx.py`:
+  1. **fp16 the embedding table** to clear the 4 GB heap. `MatMulNBits` only
+     quantizes `MatMul` ops, so the fp32 token-embedding (`[200064, 3072]` ≈ 2.46
+     GB, over half the file) stays full-size; we cast just that initializer to fp16
+     and `Cast` back to fp32 right after the `Gather`, leaving Phi-3's fp32 RMSNorm
+     islands untouched → 4.86 GB → **~3.6 GB**.
+  2. **Shard the external data** into <2 GB files (here 3: 1.69 / 1.56 / 0.38 GB)
+     plus an `external_data_manifest.json`. `app.js` reads the manifest and passes
+     `session_options: { externalData: [...] }`, so ORT fetches each shard into its
+     **own** buffer (all mounted into the one WASM heap, which holds ~3.6 GB fine).
+
+  q4 semantics are unchanged throughout (still `dtype:'q4'`, still **fp32**
+  `past_key_values`, which Transformers.js feeds in the browser). A true q4f16
+  (~3.4 GB) would *still* need sharding **and** float16 op/node block-lists around
+  RMSNorm — the embedding cast gets most of the size win without the block-lists.
 - **No COOP/COEP:** the WebGPU backend uses no `SharedArrayBuffer`, and
   `require-corp` would block the `@huggingface/transformers` CDN import. Plain
   HTTPS is all the page needs.
-- **Compression:** don't expect much — 4-bit weights are near-random, so
-  gzip/zstd/brotli shave only a few % off the `*.onnx_data` (cell 3.1 measures it).
-  The browser caches the model after first load, so it's a one-time ~4.9 GB per
-  browser; the real size win is a working q4f16 (~3.4 GB).
+- **Compression:** mixed — the 4-bit MatMul weights are near-random (gzip/zstd/
+  brotli barely dent them), the fp16 embedding region compresses ~2x; zstd takes the
+  ~3.6 GB sharded set to **~3.0 GB**. Caddy's `encode` skips large binaries, so to
+  serve compressed you pre-compress on disk (`zstd -12 -T0` each shard) and use
+  `file_server { precompressed zstd gzip }`. **Gotcha:** `precompressed` serves
+  `<shard>.zst` only when the **raw `<shard>` also exists** beside it (Caddy stats
+  the original for existence/etag) — so keep both, or `zstd -d` the `.zst` back to
+  raw on the server. Browser caches after first load → one-time download per browser.
 
 ## License
 
