@@ -180,6 +180,16 @@ what makes the tag-splitting in the UI reliable.
   device (independent of WebGPU). Fix in `app.js`: call with `{ return_dict: true }`
   to get `{ input_ids, attention_mask }` and spread both into `generate()`;
   Transformers.js derives `position_ids` from the mask.
+- **WebGPU q4 accuracy needs onnxruntime-web ≥1.22 (transformers.js ≥3.8.1).** q4
+  (`MatMulNBits`) on the **WebGPU** backend had a prefill-shader race condition
+  ([onnxruntime PR #23663](https://github.com/microsoft/onnxruntime/pull/23663),
+  merged 2025-02-14) that produced **garbled output while CPU/WASM stayed correct** —
+  exactly the "great locally, gibberish in the browser" symptom. `transformers@3.3.3`
+  bundles ort-web `1.21.0-dev.20250206` (Feb 6 2025), **8 days before** the fix;
+  **3.8.1** bundles `1.22.0-dev.20250409`, which has it. `app.js` pins 3.8.1 and
+  exposes `?tjs=<version>` (dynamic import) and `?device=wasm` to A/B-test runtimes
+  in-browser. **Always diff WebGPU output against a CPU/WASM run of the same weights
+  — they should match; if they don't, suspect the WebGPU backend, not your model.**
 - **Compression:** mixed — the 4-bit MatMul weights are near-random (gzip/zstd/
   brotli barely dent them), the fp16 embedding region compresses ~2x; zstd takes the
   ~3.6 GB sharded set to **~3.0 GB**. Caddy's `encode` skips large binaries, so to
