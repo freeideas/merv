@@ -173,9 +173,13 @@ async function generate(userText) {
   addUserBubble(userText);
   const update = addAssistantBubbles();
 
-  const input_ids = tokenizer.apply_chat_template(history, {
+  // return_dict gives us BOTH input_ids and attention_mask. The ONNX graph
+  // requires attention_mask (and derives position_ids from it), so passing
+  // input_ids alone fails at generate() with:
+  //   "Missing the following inputs: attention_mask, position_ids".
+  const inputs = tokenizer.apply_chat_template(history, {
     add_generation_prompt: true,
-    return_tensor: true,
+    return_dict: true,
   });
 
   let full = "";
@@ -189,7 +193,7 @@ async function generate(userText) {
   });
 
   await model.generate({
-    input_ids,
+    ...inputs,
     max_new_tokens: 512,
     do_sample: true,
     temperature: 0.7,
