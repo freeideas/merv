@@ -1,12 +1,13 @@
 // Mervin & Mervis — in-browser chat on a fine-tuned Phi-4-mini (ONNX q4, WebGPU).
 // Everything runs client-side; the model is served same-origin from ./model/.
 
-import {
-  AutoTokenizer,
-  AutoModelForCausalLM,
-  TextStreamer,
-  env,
-} from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3";
+// Library version is overridable for A/B testing WebGPU output quality across
+// releases (newer onnxruntime-web has WebGPU q4 accuracy fixes): ?tjs=3.8.1
+const _tjs = new URLSearchParams(location.search).get("tjs");
+const TJS_VERSION = _tjs && /^[\w.\-]+$/.test(_tjs) ? _tjs : "3.3.3";
+const { AutoTokenizer, AutoModelForCausalLM, TextStreamer, env } = await import(
+  `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TJS_VERSION}`
+);
 
 // Load weights from our own origin, never the HF Hub.
 env.allowRemoteModels = false;
