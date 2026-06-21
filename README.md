@@ -161,9 +161,10 @@ what makes the tag-splitting in the UI reliable.
      keeps the model's largest buffer ~307 MB, matching the biggest `MatMulNBits`
      weight. Without it the page *loads* (the validation error doesn't reject the
      load promise) but the embedding buffer is never created, so generation breaks.
-     Run as a post-convert step: `python colab/scripts/split_embedding.py
-     SRC_ONNX_DIR OUT_ONNX_DIR` (auto-detects the embedding, re-shards, and verifies
-     the split is byte-identical to the original).
+     `convert_to_onnx.py` runs this automatically as its last step; the same code
+     is also runnable standalone to retrofit an already-built model: `python
+     colab/scripts/split_embedding.py SRC_ONNX_DIR OUT_ONNX_DIR` (auto-detects the
+     embedding, re-shards, and verifies the split is byte-identical).
 
   q4 semantics are unchanged throughout (still `dtype:'q4'`, still **fp32**
   `past_key_values`, which Transformers.js feeds in the browser). A true q4f16
@@ -298,12 +299,13 @@ big model, and trusting `curl` for download tests.
   with float16 op/node block-lists around Phi-3's RMSNorm) — ~3.4 GB and no giant
   embedding buffer. Failing that, **bake the embedding split into conversion** from
   the start, not as a post-hoc patch.
-- **Fold the split into the convert script (with a verification gate).**
-  `colab/scripts/convert_to_onnx.py` does the fp16-embedding + sharding, but the
-  embedding *split* lives in a separate post-pass (`split_embedding.py`) — two steps
-  that can drift. Make one script produce a browser-ready (fp16-embedding → split →
-  sharded + manifest) model in a single run, and have it fail if the output isn't
-  loadable, so the convert step and the deployed artifact can't diverge.
+- **One convert script, with a verification gate (done).** Originally the
+  fp16-embedding + sharding lived in `convert_to_onnx.py` while the embedding
+  *split* was a separate manual pass — two steps that could drift. They're now
+  folded into one run: `convert_to_onnx.py` calls `split_embedding.split()` +
+  `verify()` (byte-identical check) as its last step, so the convert output and the
+  deployed artifact can't diverge. The lesson generalizes: any "do this extra step
+  after building" instruction is a drift risk — bake it into the build with a gate.
 - **Verify generation on CPU *before* WebGPU.** The `attention_mask`/`position_ids`
   bug is device-independent and would have died in a 1-minute onnxruntime-CPU smoke
   test (`device:'cpu'` in Node, or `onnxruntime` in Python: load → generate ~20
