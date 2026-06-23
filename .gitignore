@@ -15,6 +15,11 @@ checkpoints/
 mervis-lora/
 mervis-merged/
 web/model/
+# local llama-cpp GGUF model dirs (symlinked/pulled separately, not in git)
+phi4mini
+gemma4e4b
+# serve.py request/response logs
+logs/
 
 # os
 .DS_Store
